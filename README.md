@@ -52,7 +52,7 @@ The first one is easier to configure, the second one offers better performance (
 
 Mocha Test Explorer supports running VS Code extension tests using [`vscode-test`](https://github.com/Microsoft/vscode-test):
 Install the `mocha-explorer-launcher-scripts` package and add the following settings to your project:
-```
+```json
 "mochaExplorer.launcherScript": "node_modules/mocha-explorer-launcher-scripts/vscode-test",
 "mochaExplorer.autoload": false,
 "mochaExplorer.ipcRole": "server",
@@ -121,7 +121,7 @@ If you want to customize the configuration used for debugging your tests (e.g. t
 or `skipFiles`), you can do so by creating a debugging configuration in your `launch.json` and setting
 `mochaExplorer.debuggerConfig` to the name of your debugging configuration.
 Here's the default debugging configuration used by this adapter:
-```
+```json
 {
   "name": "Debug Mocha Tests",
   "type": "pwa-node",
