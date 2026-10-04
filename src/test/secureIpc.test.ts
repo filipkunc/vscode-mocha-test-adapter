@@ -100,7 +100,7 @@ describe('Authenticated worker transport', function() {
 	}
 
 	it('enforces the patched Mocha runtime requirement', function() {
-		for (const version of ['18.20.0', '20.18.0', '21.0.0', '22.11.0']) assert.throws(() => assertWorkerRuntime(version));
-		for (const version of ['20.19.0', '22.12.0', '24.0.0']) assert.doesNotThrow(() => assertWorkerRuntime(version));
+		for (const version of ['18.20.0', '20.18.0', '20.19.0', '21.0.0', '22.11.0', '23.0.0', '25.0.0']) assert.throws(() => assertWorkerRuntime(version));
+		for (const version of ['22.12.0', '24.0.0', '26.0.0']) assert.doesNotThrow(() => assertWorkerRuntime(version));
 	});
 });

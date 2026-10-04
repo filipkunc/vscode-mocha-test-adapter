@@ -449,7 +449,7 @@ export abstract class MochaAdapterCore {
 		const key = createIpcKey();
 		env[ipcKeyVariable] = key;
 		if (config.launcherScript) env['MOCHA_WORKER_IPC_MODULE'] = require.resolve('../out/secureIpc.js');
-		if (config.ipcRole) {
+		if (config.ipcRole || config.launcherScript) {
 			env['VSCODE_WORKSPACE_PATH'] = this.workspaceFolderPath;
 			env['MOCHA_WORKER_PATH'] = this.workerScript;
 		}

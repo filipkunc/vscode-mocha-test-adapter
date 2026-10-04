@@ -26,7 +26,7 @@ Run your Mocha tests using the
 
 ## Security
 
-Mocha Test Explorer requires VS Code 1.102 or later and a trusted workspace. The bundled Mocha 12 requires Node 20.19 or later in the 20.x line, or Node 22.12 or later; this applies to `mochaExplorer.nodePath` and remote workers too. Test discovery executes workspace code, including JavaScript configuration files, required modules and test files. Loading, running and debugging tests are blocked in untrusted workspaces, in addition to the extension's Workspace Trust declaration.
+Mocha Test Explorer requires VS Code 1.102 or later and a trusted workspace. Use Node 24 LTS for development and remote workers (`nvm use`). Node 22.12+ remains supported for the VS Code runtime, and Node 26 is supported. Node 20 and odd-numbered releases are no longer supported. This applies to `mochaExplorer.nodePath` and remote workers too. Test discovery executes workspace code, including JavaScript configuration files, required modules and test files. Loading, running and debugging tests are blocked in untrusted workspaces, in addition to the extension's Workspace Trust declaration.
 
 Diagnostic messages about configured environment variables include names only. Test output and errors can still contain secrets printed by workspace code; review logs before sharing them.
 
@@ -93,7 +93,7 @@ There are also example projects containing well-documented launcher scripts for 
 [in a docker container](https://github.com/hbenl/vscode-mocha-docker-example) or
 [on another machine via ssh](https://github.com/hbenl/vscode-mocha-ssh-example).
 
-Those legacy examples and the published Docker/SSH launcher scripts use plaintext TCP and require migration. Use the secure transport provided by this extension instead of the remoting utility's `createConnection`, `receiveConnection`, `readMessages` and `writeMessage` functions:
+The original launcher package 0.4 uses plaintext TCP. Migrated Docker, SSH, NYC and VS Code launchers are available in [our companion fork](https://github.com/filipkunc/mocha-explorer-launcher-scripts). Install the 0.5 package built from that fork as described in its README; it requires this hardened extension. The original upstream examples still require migration. Use the secure transport provided by this extension instead of the remoting utility's `createConnection`, `receiveConnection`, `readMessages` and `writeMessage` functions:
 
 ```js
 const transport = require(process.env.MOCHA_WORKER_IPC_MODULE);
