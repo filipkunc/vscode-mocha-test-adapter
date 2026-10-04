@@ -7,6 +7,7 @@ import { createConnection, receiveConnection, readMessages, writeMessage } from 
 import { ErrorInfo, WorkerArgs } from 'vscode-test-adapter-remoting-util/out/mocha';
 import { findTests, stringsOnly } from './util';
 import { AdapterConfig } from './configReader';
+import { ipcHostOrLoopback } from './security';
 
 export interface IDisposable {
 	dispose(): void;
@@ -34,6 +35,8 @@ export interface ILog {
 }
 
 export abstract class MochaAdapterCore {
+
+	protected abstract readonly isWorkspaceTrusted: boolean;
 
 	protected abstract readonly workspaceFolderPath: string;
 
@@ -63,6 +66,8 @@ export abstract class MochaAdapterCore {
 
 	async load(changedFiles?: string[], reloadConfig = true): Promise<void> {
 
+		if (!this.isWorkspaceTrusted) return;
+
 		if (this.skipNextLoadRequest) {
 			if (this.log.enabled) this.log.info(`Skipping the initial load request for ${this.workspaceFolderPath}`);
 			this.skipNextLoadRequest = false;
@@ -82,7 +87,7 @@ export abstract class MochaAdapterCore {
 			}
 			const config = await this.configReader.currentConfig;
 
-			if (!config) {
+			if (!config || !this.isWorkspaceTrusted) {
 				this.log.info('Adapter disabled for this folder, loading cancelled');
 				this.nodesById.clear();
 				this.testsEmitter.fire(<TestLoadFinishedEvent>{ type: 'finished' });
@@ -215,6 +220,8 @@ export abstract class MochaAdapterCore {
 
 	async run(testsToRun: string[], debug = false): Promise<void> {
 
+		if (!this.isWorkspaceTrusted) return;
+
 		const testRunId = String(this.nextTestRunId++);
 
 		try {
@@ -223,7 +230,7 @@ export abstract class MochaAdapterCore {
 
 			const config = await this.configReader.currentConfig;
 
-			if (!config) {
+			if (!config || !this.isWorkspaceTrusted) {
 				this.log.info('Adapter disabled for this folder, running cancelled');
 				return;
 			}
@@ -389,11 +396,13 @@ export abstract class MochaAdapterCore {
 
 	async debug(testsToRun: string[]): Promise<void> {
 
+		if (!this.isWorkspaceTrusted) return;
+
 		if (this.log.enabled) this.log.info(`Debugging test(s) ${JSON.stringify(testsToRun)} of ${this.workspaceFolderPath}`);
 
 		const config = await this.configReader.currentConfig;
 
-		if (!config) {
+		if (!config || !this.isWorkspaceTrusted) {
 			this.log.info('Adapter disabled for this folder, debugging cancelled');
 			return;
 		}
@@ -432,7 +441,7 @@ export abstract class MochaAdapterCore {
 		const ipcOpts = {
 			role: config.ipcRole ? ((config.ipcRole === 'client') ? 'server' : 'client') : undefined,
 			port: config.ipcRole ? config.ipcPort : undefined,
-			host: config.ipcRole ? config.ipcHost : undefined
+			host: config.ipcRole ? ipcHostOrLoopback(config.ipcHost) : undefined
 		};
 		const ipcOptsString = JSON.stringify(ipcOpts);
 
@@ -473,9 +482,9 @@ export abstract class MochaAdapterCore {
 
 			let ipcSocket: Socket | undefined;
 			if (config.ipcRole === 'client') {
-				ipcSocket = await createConnection(config.ipcPort, { host: config.ipcHost, timeout: config.ipcTimeout });
+				ipcSocket = await createConnection(config.ipcPort, { host: ipcHostOrLoopback(config.ipcHost), timeout: config.ipcTimeout });
 			} else {
-				ipcSocket = await receiveConnection(config.ipcPort, { host: config.ipcHost, timeout: config.ipcTimeout });
+				ipcSocket = await receiveConnection(config.ipcPort, { host: ipcHostOrLoopback(config.ipcHost), timeout: config.ipcTimeout });
 			}
 
 			readMessages(ipcSocket, handler);

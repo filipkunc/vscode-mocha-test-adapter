@@ -31,6 +31,10 @@ export class MochaAdapter extends MochaAdapterCore implements TestAdapter, IDisp
 		return this.workspaceFolder.uri.fsPath;
 	}
 
+	protected get isWorkspaceTrusted(): boolean {
+		return vscode.workspace.isTrusted;
+	}
+
 	constructor(
 		public readonly workspaceFolder: vscode.WorkspaceFolder,
 		workspaceState: vscode.Memento,

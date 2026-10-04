@@ -19,6 +19,7 @@ export default {
 		nodeResolve(),
 		commonjs(),
 		typescript({
+			include: [ '**/*.ts', '**/*.tsx' ],
 			tsconfigOverride: { compilerOptions: { module: 'ES2015' } }
 		}),
 	]

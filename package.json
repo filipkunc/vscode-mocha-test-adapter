@@ -47,11 +47,11 @@
   ],
   "dependencies": {
     "chokidar": "^3.6.0",
-    "diff": "^5.2.0",
+    "diff": "^5.2.2",
     "dotenv": "^16.5.0",
     "escape-string-regexp": "^5.0.0",
-    "glob": "^10.4.5",
-    "minimatch": "^9.0.5",
+    "glob": "^10.5.0",
+    "minimatch": "^9.0.9",
     "mocha": "^11.1.0",
     "source-map-support": "^0.5.21",
     "split": "^1.0.1",
@@ -75,20 +75,20 @@
     "@types/source-map-support": "^0.5.10",
     "@types/split": "^1.0.5",
     "@types/stack-trace": "^0.0.33",
-    "@types/vscode": "~1.56.0",
+    "@types/vscode": "~1.57.0",
     "@types/yargs": "^16.0.9",
     "@vscode/vsce": "^3.3.2",
     "esm": "^3.2.25",
     "mocha-prepare": "^0.1.0",
     "rimraf": "^6.0.1",
-    "rollup": "^2.79.2",
+    "rollup": "^2.80.0",
     "rollup-plugin-typescript2": "^0.32.1",
     "semver": "^7.7.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
   },
   "engines": {
-    "vscode": "^1.56.0"
+    "vscode": "^1.57.0"
   },
   "activationEvents": [
     "*"
@@ -390,7 +390,7 @@
           "scope": "resource"
         },
         "mochaExplorer.ipcHost": {
-          "description": "The TCP host used for communication with worker processes. If `mochaExplorer.ipcRole` is set to `client`, this is the address that Mocha Explorer tries to connect to, if it is set to `server`, this is the address on which Mocha Explorer will listen for a connection.",
+          "description": "The TCP host used for communication with worker processes. With ipcRole set to client, this is the connection address; with server, it is the listening address. Null or empty values use 127.0.0.1. TCP communication is unauthenticated and unencrypted; protect remote connections with a tunnel.",
           "type": [
             "string",
             "null"

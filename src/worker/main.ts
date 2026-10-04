@@ -10,6 +10,7 @@ import { patchMocha } from './patchMocha';
 import { processTests } from './processTests';
 import ReporterFactory from './reporter';
 import { fileExists } from '../util';
+import { ipcHostOrLoopback } from '../security';
 
 export default (async () => {
 
@@ -30,8 +31,8 @@ export default (async () => {
 	if (netOpts && netOpts.role && netOpts.port) {
 
 		const socket = (netOpts.role === 'client') ?
-			await createConnection(netOpts.port, { host: netOpts.host }) :
-			await receiveConnection(netOpts.port, { host: netOpts.host });
+			await createConnection(netOpts.port, { host: ipcHostOrLoopback(netOpts.host) }) :
+			await receiveConnection(netOpts.port, { host: ipcHostOrLoopback(netOpts.host) });
 
 		const argsJson = await new Promise<string>(resolve => {
 			socket.pipe(split()).once('data', resolve);

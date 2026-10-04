@@ -24,6 +24,14 @@ Run your Mocha tests using the
 * Open the Test view by clicking on the flask icon in the [Activity Bar](https://code.visualstudio.com/docs/getstarted/userinterface#_activity-bar)
 * Run / Debug your tests using the ![Run](img/run.png) / ![Debug](img/debug.png) icons in the Test Explorer or the CodeLenses in your test file
 
+## Security
+
+Mocha Test Explorer requires VS Code 1.57 or later and a trusted workspace. Test discovery executes workspace code, including JavaScript configuration files, required modules and test files. Loading, running and debugging tests are blocked in untrusted workspaces, in addition to the extension's Workspace Trust declaration.
+
+Diagnostic messages about configured environment variables include names only. Test output and errors can still contain secrets printed by workspace code; review logs before sharing them.
+
+TCP worker communication is optional; the default uses Node's child-process IPC. TCP hosts set to `null`, an empty string or omitted fall back to `127.0.0.1` on both sides. Explicit remote hosts remain supported. This TCP protocol has no authentication or encryption, so use an SSH tunnel or another protected transport for remote workers. Local TCP also assumes other processes on the machine are trusted.
+
 ## Using transpilers (Typescript, Babel, etc.)
 
 If you use a transpiler in your project, there are 2 ways to make the tests work in Mocha Test Explorer.
@@ -161,7 +169,7 @@ Property                           | Description
 `mochaExplorer.launcherScript`     | The path to a launcher script (relative to the workspace folder) for [running your tests remotely](https://github.com/hbenl/vscode-test-adapter-remoting-util)
 `mochaExplorer.ipcRole`            | Use a TCP connection instead of Node's IPC mechanism for talking to worker processes. This is only needed with some launcher scripts.
 `mochaExplorer.ipcPort`            | The TCP port that worker processes use to send their results to VS Code if `mochaExplorer.ipcRole` is set (default: `9449`)
-`mochaExplorer.ipcHost`            | The TCP host used for communication with worker processes. If `mochaExplorer.ipcRole` is set to `client`, this is the address that Mocha Explorer tries to connect to, if it is set to `server`, this is the address on which Mocha Explorer will listen for a connection, if it is set to `null`, Mocha Explorer will listen on all addresses. (default: `localhost`)
+`mochaExplorer.ipcHost`            | The TCP host used for communication with worker processes. If `mochaExplorer.ipcRole` is set to `client`, this is the address that Mocha Explorer tries to connect to; if set to `server`, this is the listening address. Null, empty or omitted values use `127.0.0.1`. To listen on all IPv4 addresses, explicitly set `0.0.0.0` and protect the connection (see Security above). (default: `localhost`)
 `mochaExplorer.ipcTimeout`         | The timeout in milliseconds for establishing a TCP connection to a worker process if `mochaExplorer.ipcRole` is set (default: `5000`)
 `mochaExplorer.autoload`           | Automatically (re)load the tests when source files or relevant settings are changed and/or when VS Code is started (`true`, `false`, or `"onStart"`; default: `true`)
 `testExplorer.codeLens`            | Show a CodeLens above each test or suite for running or debugging the tests

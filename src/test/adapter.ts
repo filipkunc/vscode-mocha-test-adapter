@@ -86,6 +86,8 @@ export async function createTestMochaAdapter(
 
 export class TestMochaAdapter extends MochaAdapterCore {
 
+	protected get isWorkspaceTrusted(): boolean { return true; }
+
 	protected activeDebugSession: any;
 
 	constructor(
