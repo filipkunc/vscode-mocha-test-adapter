@@ -26,11 +26,13 @@ Run your Mocha tests using the
 
 ## Security
 
-Mocha Test Explorer requires VS Code 1.57 or later and a trusted workspace. Test discovery executes workspace code, including JavaScript configuration files, required modules and test files. Loading, running and debugging tests are blocked in untrusted workspaces, in addition to the extension's Workspace Trust declaration.
+Mocha Test Explorer requires VS Code 1.102 or later and a trusted workspace. The bundled Mocha 12 requires Node 20.19 or later in the 20.x line, or Node 22.12 or later; this applies to `mochaExplorer.nodePath` and remote workers too. Test discovery executes workspace code, including JavaScript configuration files, required modules and test files. Loading, running and debugging tests are blocked in untrusted workspaces, in addition to the extension's Workspace Trust declaration.
 
 Diagnostic messages about configured environment variables include names only. Test output and errors can still contain secrets printed by workspace code; review logs before sharing them.
 
-TCP worker communication is optional; the default uses Node's child-process IPC. TCP hosts set to `null`, an empty string or omitted fall back to `127.0.0.1` on both sides. Explicit remote hosts remain supported. This TCP protocol has no authentication or encryption, so use an SSH tunnel or another protected transport for remote workers. Local TCP also assumes other processes on the machine are trusted.
+TCP worker communication is optional; the default uses Node's child-process IPC. TCP connections now require TLS 1.2 with a fresh 256-bit pre-shared key for every worker launch, authenticating both endpoints and encrypting messages with `ECDHE-PSK-CHACHA20-POLY1305`. Missing/wrong keys, plaintext peers and unsupported ciphers fail closed. The protocol never falls back to plaintext. Connection attempts have a deadline, and JSON messages are limited to 16 MiB and parsed without uncaught exceptions. TCP hosts set to `null`, an empty string or omitted fall back to `127.0.0.1` on both sides; explicit remote hosts remain supported.
+
+The key is delivered to the launcher through `MOCHA_WORKER_IPC_KEY`, never in command-line arguments or diagnostic messages, and removed from the bundled worker's environment before loading workspace code. Protect it when transferring it to a remote worker. Processes capable of reading another process's environment or memory remain inside the local trust boundary. These controls do not sandbox trusted workspace code.
 
 ## Using transpilers (Typescript, Babel, etc.)
 
@@ -60,6 +62,7 @@ The first one is easier to configure, the second one offers better performance (
 
 Mocha Test Explorer supports running VS Code extension tests using [`vscode-test`](https://github.com/Microsoft/vscode-test):
 Install the `mocha-explorer-launcher-scripts` package and add the following settings to your project:
+The published 0.4.0 launcher must be migrated to forward `MOCHA_WORKER_IPC_KEY` in `extensionTestsEnv` and use a VS Code version meeting the runtime requirement above. It invokes the bundled worker, which handles the secure connection. A launcher that does not forward the key will fail closed.
 ```json
 "mochaExplorer.launcherScript": "node_modules/mocha-explorer-launcher-scripts/vscode-test",
 "mochaExplorer.autoload": false,
@@ -90,6 +93,18 @@ There are also example projects containing well-documented launcher scripts for 
 [in a docker container](https://github.com/hbenl/vscode-mocha-docker-example) or
 [on another machine via ssh](https://github.com/hbenl/vscode-mocha-ssh-example).
 
+Those legacy examples and the published Docker/SSH launcher scripts use plaintext TCP and require migration. Use the secure transport provided by this extension instead of the remoting utility's `createConnection`, `receiveConnection`, `readMessages` and `writeMessage` functions:
+
+```js
+const transport = require(process.env.MOCHA_WORKER_IPC_MODULE);
+const key = process.env.MOCHA_WORKER_IPC_KEY;
+const socket = await transport.createSecureConnection(port, { host, key, timeout: 5000 });
+transport.readSecureMessages(socket, handleWorkerMessage);
+await transport.writeSecureMessage(socket, workerArgs);
+```
+
+Use `receiveSecureConnection` when the launcher listens for the worker. Forward the key into the remote worker's environment over a protected channel and run the updated bundled worker. For Docker, `--env MOCHA_WORKER_IPC_KEY` forwards the inherited value without putting it in argv. Preserve any required path conversion. [examples/secure-launcher.js](examples/secure-launcher.js) provides a tested local proxy showing the protocol; copy it into your workspace and set `mochaExplorer.launcherScript` to its path for a local example. The environment variables are provided for every launcher, including those using child-process IPC to communicate with the extension.
+
 Alternatively, you can use [VS Code Remote Development](https://code.visualstudio.com/docs/remote/remote-overview)
 to move your workspace to the remote environment. If you do so, your tests will also be run in this environment automatically.
 This is easier to set up (because you don't need to write a launcher script), but requires that your entire workspace and large
@@ -101,6 +116,7 @@ parts of VS Code run in the remote environment, which (depending on the environm
 
 You can put any command line options into a [mocha configuration file](https://mochajs.org/#configuring-mocha-nodejs)
 or the legacy [`mocha.opts` file](https://mochajs.org/#mochaopts).
+Mocha 12 uses stricter YAML parsing: an otherwise empty YAML config must contain `{}`.
 For `mocha.opts`, this adapter will use the path `test/mocha.opts` by default but you can override that with the `mochaExplorer.optsFile` setting.
 
 Alternatively, you can put supported options into VS Code's settings:

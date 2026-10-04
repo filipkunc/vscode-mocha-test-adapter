@@ -4,7 +4,7 @@ import { readFile, fileExists, normalizePath } from './util';
 import * as vscode from 'vscode';
 import { glob } from 'glob';
 import { minimatch } from 'minimatch';
-import chokidar from 'chokidar';
+import { FSWatcher } from 'chokidar';
 import assert from 'assert';
 import { parse as dotenvParse } from 'dotenv';
 import { detectNodePath, Log } from 'vscode-test-adapter-util';
@@ -14,6 +14,7 @@ import { MochaOptsReader, MochaOptsAndFiles } from './optsReader';
 import { configKeys, OnChange, configSection } from './configKeys';
 import { FileChangeDebouncer } from './debouncer';
 import { ipcHostOrLoopback } from './security';
+import { watchGlobs } from './globWatcher';
 
 export type EnvVars = { [envVar: string]: string | null };
 
@@ -72,7 +73,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 
 	private enabledStateKey: string;
 
-	private watcher?: chokidar.FSWatcher;
+	private watcher?: FSWatcher;
 	private debouncer?: FileChangeDebouncer;
 
 	private _currentConfig: Promise<AdapterConfig | undefined> | undefined;
@@ -273,10 +274,8 @@ export class ConfigReader implements IConfigReader, IDisposable {
 
 		const watcherConfig = this.getWatcherConfig(config);
 		if (watcherConfig) {
-			this.watcher = chokidar.watch(watcherConfig.files, {
-				ignored: watcherConfig.ignore,
-				ignoreInitial: true
-			});
+			this.watcher = watchGlobs(watcherConfig.files, watcherConfig.ignore);
+			this.watcher.on('error', error => this.log.error('File watcher failed', error));
 			this.debouncer = new FileChangeDebouncer(
 				watcherConfig.debounce,
 				(reload, changedFiles) => this.filesChangedCallback(reload, changedFiles)
@@ -441,7 +440,9 @@ export class ConfigReader implements IConfigReader, IDisposable {
 		}
 
 		const normalizeArray = (files: string[]) => files.map(
-			file => path.resolve(this.workspaceFolder.uri.fsPath, file)
+			file => file.startsWith('!')
+				? '!' + path.resolve(this.workspaceFolder.uri.fsPath, file.slice(1))
+				: path.resolve(this.workspaceFolder.uri.fsPath, file)
 		);
 
 		const defaultIgnore = normalizeArray([ '**/node_modules/**' ]);

@@ -46,13 +46,13 @@
     "hbenl.vscode-test-explorer"
   ],
   "dependencies": {
-    "chokidar": "^3.6.0",
+    "chokidar": "^4.0.3",
     "diff": "^5.2.2",
     "dotenv": "^16.5.0",
     "escape-string-regexp": "^5.0.0",
     "glob": "^10.5.0",
     "minimatch": "^9.0.9",
-    "mocha": "^11.1.0",
+    "mocha": "^12.0.3",
     "source-map-support": "^0.5.21",
     "split": "^1.0.1",
     "stack-trace": "0.0.10",
@@ -70,12 +70,12 @@
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@types/diff": "^5.2.3",
     "@types/mocha": "^10.0.10",
-    "@types/node": "^14.18.63",
+    "@types/node": "^22.20.5",
     "@types/semver": "^7.7.0",
     "@types/source-map-support": "^0.5.10",
     "@types/split": "^1.0.5",
     "@types/stack-trace": "^0.0.33",
-    "@types/vscode": "~1.57.0",
+    "@types/vscode": "~1.102.0",
     "@types/yargs": "^16.0.9",
     "@vscode/vsce": "^3.3.2",
     "esm": "^3.2.25",
@@ -88,7 +88,7 @@
     "typescript": "^5.8.3"
   },
   "engines": {
-    "vscode": "^1.57.0"
+    "vscode": "^1.102.0"
   },
   "activationEvents": [
     "*"
@@ -390,7 +390,7 @@
           "scope": "resource"
         },
         "mochaExplorer.ipcHost": {
-          "description": "The TCP host used for communication with worker processes. With ipcRole set to client, this is the connection address; with server, it is the listening address. Null or empty values use 127.0.0.1. TCP communication is unauthenticated and unencrypted; protect remote connections with a tunnel.",
+          "description": "The TCP host used for authenticated, encrypted worker communication. With ipcRole set to client, this is the connection address; with server, it is the listening address. Null or empty values use 127.0.0.1. Custom launchers must forward MOCHA_WORKER_IPC_KEY and use the updated worker protocol.",
           "type": [
             "string",
             "null"

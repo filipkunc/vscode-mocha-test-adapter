@@ -13,7 +13,7 @@ export default {
 		exports: 'default'
 	},
 
-	external: [ 'os', 'fs', 'util', 'path', 'net', 'stream', 'buffer', 'string_decoder' ],
+	external: [ 'os', 'fs', 'util', 'path', 'net', 'tls', 'crypto', 'stream', 'buffer', 'string_decoder' ],
 
 	plugins: [
 		nodeResolve(),

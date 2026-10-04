@@ -109,9 +109,22 @@ describe('Security boundaries', function() {
 			await new Promise<void>(resolve => server.close(() => resolve()));
 			config.ipcRole = role;
 			config.ipcHost = undefined;
+			if (role === 'client') config.nodePath = process.execPath;
 			config.mochaOpts.exit = true;
 			await adapter.load();
 			assert.ok(adapter.getLoadedTests(), adapter.getTestLoadFinishedEvent()?.errorMessage);
+			await adapter.run([adapter.getLoadedTests()!.id]);
+			assert.ok(adapter.getTestsThatWereRun().some(test => test.result === 'passed'));
 		});
 	}
+
+	it('supports an IPC launcher that proxies through encrypted TCP without exposing the key to tests', async function() {
+		const adapter = await createTestMochaAdapter('javascript/secure');
+		const config = await (adapter as any).configReader.currentConfig;
+		config.launcherScript = path.resolve(__dirname, '../../examples/secure-launcher.js');
+		await adapter.load();
+		assert.ok(adapter.getLoadedTests(), adapter.getTestLoadFinishedEvent()?.errorMessage);
+		await adapter.run([adapter.getLoadedTests()!.id]);
+		assert.deepStrictEqual(adapter.getTestsThatWereRun().map(test => test.result), ['passed']);
+	});
 });

@@ -2,17 +2,19 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as util from 'util';
 import Module from 'module';
-import { createConnection, receiveConnection, writeMessage } from 'vscode-test-adapter-remoting-util/out/ipc';
-import split from 'split';
 import RegExEscape from 'escape-string-regexp';
 import { WorkerArgs, ErrorInfo, NetworkOptions } from 'vscode-test-adapter-remoting-util/out/mocha';
 import { patchMocha } from './patchMocha';
 import { processTests } from './processTests';
 import ReporterFactory from './reporter';
 import { fileExists } from '../util';
-import { ipcHostOrLoopback } from '../security';
+import { createSecureConnection, receiveSecureConnection, readSecureMessages, writeSecureMessage, ipcKeyVariable } from '../secureIpc';
+import { assertWorkerRuntime } from '../runtime';
 
 export default (async () => {
+	assertWorkerRuntime();
+	const key = process.env[ipcKeyVariable];
+	delete process.env[ipcKeyVariable];
 
 	let netOpts: NetworkOptions | undefined;
 
@@ -31,14 +33,17 @@ export default (async () => {
 	if (netOpts && netOpts.role && netOpts.port) {
 
 		const socket = (netOpts.role === 'client') ?
-			await createConnection(netOpts.port, { host: ipcHostOrLoopback(netOpts.host) }) :
-			await receiveConnection(netOpts.port, { host: ipcHostOrLoopback(netOpts.host) });
+			await createSecureConnection(netOpts.port, { host: netOpts.host, key }) :
+			await receiveSecureConnection(netOpts.port, { host: netOpts.host, key });
+		socket.on('error', () => process.exit(1));
 
-		const argsJson = await new Promise<string>(resolve => {
-			socket.pipe(split()).once('data', resolve);
+		const args = await new Promise<WorkerArgs>((resolve, reject) => {
+			socket.once('error', reject);
+			socket.once('close', () => reject(new Error('Secure worker IPC closed before receiving arguments')));
+			readSecureMessages(socket, resolve);
 		});
 
-		await execute(JSON.parse(argsJson), msg => writeMessage(socket, msg), () => socket.unref());
+		await execute(args, msg => writeSecureMessage(socket, msg), () => socket.unref());
 
 	} else if (process.send) {
 
@@ -78,19 +83,23 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 
 		const mochaPath = args.mochaPath ? args.mochaPath : path.dirname(require.resolve('mocha'));
 		if (args.logEnabled) sendMessage(`Using the mocha package at ${mochaPath}`);
-		const Mocha: typeof import('mocha') = require(mochaPath);
+		const mochaModule = require(mochaPath);
+		const Mocha: typeof import('mocha') = mochaModule.default || mochaModule;
+		if (mochaModule.default) {
+			// Keep legacy CJS plugins working when Node returns Mocha 12's ESM
+			// namespace. This compatibility mapping is confined to this worker.
+			const cached = require.cache[require.resolve(mochaPath)];
+			if (cached) cached.exports = Mocha;
+		}
 
 		let requireOrImport: ((file: string) => Promise<any>) | undefined;
 		if (args.esmLoader) {
-			let esmUtilsPath = path.join(mochaPath, 'lib/nodejs/esm-utils.js');
-			if (await fileExists(esmUtilsPath)) {
-				const esmUtils = require(esmUtilsPath);
-				requireOrImport = esmUtils.requireOrImport;
-			}
-			esmUtilsPath = path.join(mochaPath, 'lib/esm-utils.js');
-			if (await fileExists(esmUtilsPath)) {
-				const esmUtils = require(esmUtilsPath);
-				requireOrImport = esmUtils.requireOrImport;
+			for (const relativePath of ['lib/nodejs/esm-utils.cjs', 'lib/nodejs/esm-utils.js', 'lib/esm-utils.js']) {
+				const esmUtilsPath = path.join(mochaPath, relativePath);
+				if (await fileExists(esmUtilsPath)) {
+					requireOrImport = require(esmUtilsPath).requireOrImport;
+					break;
+				}
 			}
 		}
 
@@ -126,7 +135,7 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 		for (let req of args.mochaOpts.requires) {
 
 			if (fs.existsSync(req) || fs.existsSync(`${req}.js`)) {
-				req = path.resolve(req);
+				req = cwdRequire.resolve(path.resolve(req));
 			}
 
 			if (requireOrImport) {
@@ -186,7 +195,8 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 
 		} else {
 
-			const stringify: (obj: any) => string = require(`${mochaPath}/lib/utils`).stringify;
+			const utilsPath = await fileExists(`${mochaPath}/lib/utils.cjs`) ? `${mochaPath}/lib/utils.cjs` : `${mochaPath}/lib/utils`;
+			const stringify: (obj: any) => string = require(utilsPath).stringify;
 			const regExp = new RegExp('^(' + args.tests!.map(RegExEscape).join('|') + ')$');
 			mocha.grep(regExp);
 			mocha.reporter(<any>ReporterFactory(sendMessage, stringify, sourceMapSupportEnabled, useBaseDir ? args.cwd : undefined));
