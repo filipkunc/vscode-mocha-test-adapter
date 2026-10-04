@@ -7,12 +7,17 @@ const matcherOptions = { dot: true, nonegate: true, windowsPathsNoEscape: true, 
 
 function compile(pattern: string) {
 	const matcher = new Minimatch(normalize(pattern), matcherOptions);
-	const roots = matcher.set.map(parts => {
+	// nocase turns even literal path segments into regexes. Parse roots with
+	// case sensitivity so a Windows drive letter never becomes the first glob.
+	const rootMatcher = new Minimatch(normalize(pattern), { ...matcherOptions, nocase: false });
+	const roots = rootMatcher.set.map(parts => {
 		const firstMagic = parts.findIndex(part => typeof part !== 'string');
 		const literalParts = firstMagic < 0 ? parts : parts.slice(0, firstMagic);
 		return literalParts.join('/') || path.parse(pattern).root;
 	});
-	const matches = (filename: string) => matcher.match(filename) || (!matcher.hasMagic() && roots.some(root => filename.startsWith(root.replace(/\/$/, '') + '/')));
+	const comparable = (value: string) => matcherOptions.nocase ? value.toLowerCase() : value;
+	const matches = (filename: string) => matcher.match(filename) || (!rootMatcher.hasMagic() && roots.some(root =>
+		comparable(filename).startsWith(comparable(root.replace(/\/$/, '') + '/'))));
 	return { matcher, roots, matches };
 }
 

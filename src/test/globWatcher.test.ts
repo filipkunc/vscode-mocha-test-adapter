@@ -11,7 +11,7 @@ describe('Glob watches with Chokidar 4', function() {
 		fs.mkdirSync(path.join(directory, 'src'));
 		const watcher = watchGlobs([path.join(directory, 'src/**/*.{js,ts}')], [path.join(directory, '**/node_modules/**'), path.join(directory, '**/ignored.js')]);
 		const events: string[] = [];
-		watcher.on('all', (event, filename) => events.push(`${event}:${path.relative(directory, filename)}`));
+		watcher.on('all', (event, filename) => events.push(`${event}:${path.relative(directory, filename).split(path.sep).join('/')}`));
 		const waitFor = (expected: string) => new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(() => { watcher.removeListener('all', listener); reject(new Error(`Missing watcher event ${expected}: ${events}`)); }, 2000);
 			const listener = () => { if (events.includes(expected)) { clearTimeout(timer); watcher.removeListener('all', listener); resolve(); } };
@@ -20,6 +20,8 @@ describe('Glob watches with Chokidar 4', function() {
 		});
 		try {
 			await once(watcher, 'ready');
+			assert.ok(Object.keys(watcher.getWatched()).every(filename =>
+				path.parse(filename).root !== filename), 'A workspace glob must not watch the filesystem root');
 			fs.mkdirSync(path.join(directory, 'src/new'));
 			const test = path.join(directory, 'src/new/test.ts');
 			fs.writeFileSync(test, 'first');
@@ -47,6 +49,8 @@ describe('Glob watches with Chokidar 4', function() {
 		watcher.on('add', filename => files.push(filename));
 		try {
 			await once(watcher, 'ready');
+			assert.ok(Object.keys(watcher.getWatched()).every(filename =>
+				path.parse(filename).root !== filename), 'A workspace glob must not watch the filesystem root');
 			const added = once(watcher, 'add');
 			fs.writeFileSync(path.join(directory, 'hidden.skip'), 'ignored');
 			fs.writeFileSync(path.join(directory, 'visible.txt'), 'included');

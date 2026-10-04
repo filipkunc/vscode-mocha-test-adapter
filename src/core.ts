@@ -6,6 +6,7 @@ import { ErrorInfo, WorkerArgs } from 'vscode-test-adapter-remoting-util/out/moc
 import { findTests, stringsOnly } from './util';
 import { AdapterConfig } from './configReader';
 import { ipcHostOrLoopback } from './security';
+import { terminateWorker } from './process';
 import { createIpcKey, ipcKeyVariable, createSecureConnection, receiveSecureConnection, readSecureMessages, writeSecureMessage } from './secureIpc';
 
 export interface IDisposable {
@@ -170,7 +171,7 @@ export abstract class MochaAdapterCore {
 
 						testsLoaded = true;
 						if (config.mochaOpts.exit && !config.launcherScript) {
-							childProc.kill();
+							void terminateWorker(childProc).catch(error => this.log.error(error));
 						}
 						resolve();
 					}
@@ -347,7 +348,7 @@ export abstract class MochaAdapterCore {
 							}
 
 						} else if (config.mochaOpts.exit && !config.launcherScript && this.runningTestProcess) {
-							this.runningTestProcess.kill();
+							void terminateWorker(this.runningTestProcess).catch(error => this.log.error(error));
 						}
 					}
 				};
@@ -432,7 +433,7 @@ export abstract class MochaAdapterCore {
 	cancel(): void {
 		if (this.runningTestProcess) {
 			this.log.info('Killing running test process');
-			this.runningTestProcess.kill();
+			void terminateWorker(this.runningTestProcess).catch(error => this.log.error(error));
 		}
 	}
 
@@ -493,13 +494,13 @@ export abstract class MochaAdapterCore {
 				const ipcSocket = await (config.ipcRole === 'client'
 					? createSecureConnection(config.ipcPort, options)
 					: receiveSecureConnection(config.ipcPort, options));
-				ipcSocket.on('error', () => { this.log.error('Secure worker IPC failed'); childProc.kill(); });
-				ipcSocket.once('close', () => { if (childProc.exitCode === null && !childProc.killed) childProc.kill(); });
+				ipcSocket.on('error', () => { this.log.error('Secure worker IPC failed'); void terminateWorker(childProc).catch(error => this.log.error(error)); });
+				ipcSocket.once('close', () => { if (childProc.exitCode === null && !childProc.killed) void terminateWorker(childProc).catch(error => this.log.error(error)); });
 				childProc.once('exit', () => ipcSocket.destroy());
 				readSecureMessages(ipcSocket, handler);
 				await writeSecureMessage(ipcSocket, args);
 			} catch (error) {
-				childProc.kill();
+				void terminateWorker(childProc).catch(error => this.log.error(error));
 				throw error;
 			}
 
