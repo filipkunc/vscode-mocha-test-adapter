@@ -2,16 +2,22 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as util from 'util';
 import Module from 'module';
-import { createConnection, receiveConnection, writeMessage } from 'vscode-test-adapter-remoting-util/out/ipc';
-import split from 'split';
 import RegExEscape from 'escape-string-regexp';
 import { WorkerArgs, ErrorInfo, NetworkOptions } from 'vscode-test-adapter-remoting-util/out/mocha';
 import { patchMocha } from './patchMocha';
 import { processTests } from './processTests';
 import ReporterFactory from './reporter';
 import { fileExists } from '../util';
+import { createSecureConnection, receiveSecureConnection, readSecureMessages, writeSecureMessage, ipcKeyVariable } from '../secureIpc';
+import { assertWorkerRuntime } from '../runtime';
+
+// An embedded VS Code test runner must let its host control process lifetime.
+const ownsProcess = require.main === module || module.id === '[stdin]';
 
 export default (async () => {
+	assertWorkerRuntime();
+	const key = process.env[ipcKeyVariable];
+	delete process.env[ipcKeyVariable];
 
 	let netOpts: NetworkOptions | undefined;
 
@@ -30,22 +36,38 @@ export default (async () => {
 	if (netOpts && netOpts.role && netOpts.port) {
 
 		const socket = (netOpts.role === 'client') ?
-			await createConnection(netOpts.port, { host: netOpts.host }) :
-			await receiveConnection(netOpts.port, { host: netOpts.host });
+			await createSecureConnection(netOpts.port, { host: netOpts.host, key }) :
+			await receiveSecureConnection(netOpts.port, { host: netOpts.host, key });
+		let ending = false;
+		socket.on('error', () => { if (ownsProcess) process.exit(1); });
+		socket.once('close', () => { if (ownsProcess && !ending) process.exit(1); });
 
-		const argsJson = await new Promise<string>(resolve => {
-			socket.pipe(split()).once('data', resolve);
+		const args = await new Promise<WorkerArgs>((resolve, reject) => {
+			socket.once('error', reject);
+			socket.once('close', () => reject(new Error('Secure worker IPC closed before receiving arguments')));
+			readSecureMessages(socket, resolve);
 		});
 
-		await execute(JSON.parse(argsJson), msg => writeMessage(socket, msg), () => socket.unref());
+		await execute(args, msg => writeSecureMessage(socket, msg), async () => {
+			if (args.mochaOpts.exit) {
+				ending = true;
+				await new Promise<void>(resolve => socket.end(resolve));
+			} else {
+				socket.unref();
+			}
+		});
 
 	} else if (process.send) {
+
+		if (ownsProcess) process.once('disconnect', () => process.exit(1));
 
 		const args = await new Promise<WorkerArgs>(resolve => {
 			process.once('message', resolve);
 		});
 
-		await execute(args, async msg => { process.send!(msg); });
+		await execute(args, msg => new Promise<void>((resolve, reject) => {
+			process.send!(msg, error => error ? reject(error) : resolve());
+		}), async () => { process.channel?.unref(); });
 
 	} else {
 
@@ -54,8 +76,14 @@ export default (async () => {
 	}
 })();
 
-async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<void>, onFinished?: () => void): Promise<void> {
+async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<void>, onFinished?: () => Promise<void>): Promise<void> {
 
+	const finish = async () => {
+		if (onFinished) await onFinished();
+		// Wait for the final IPC write before exiting. NYC then runs its normal
+		// exit hooks and its parent can write coverage instead of being killed.
+		if (args.mochaOpts.exit && ownsProcess) process.exit(0);
+	};
 	let logEnabled = args.logEnabled;
 	let sendErrorInfo = (args.action === 'loadTests');
 	const sourceMapSupportEnabled = args.mochaOpts.requires.includes('source-map-support/register');
@@ -77,19 +105,23 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 
 		const mochaPath = args.mochaPath ? args.mochaPath : path.dirname(require.resolve('mocha'));
 		if (args.logEnabled) sendMessage(`Using the mocha package at ${mochaPath}`);
-		const Mocha: typeof import('mocha') = require(mochaPath);
+		const mochaModule = require(mochaPath);
+		const Mocha: typeof import('mocha') = mochaModule.default || mochaModule;
+		if (mochaModule.default) {
+			// Keep legacy CJS plugins working when Node returns Mocha 12's ESM
+			// namespace. This compatibility mapping is confined to this worker.
+			const cached = require.cache[require.resolve(mochaPath)];
+			if (cached) cached.exports = Mocha;
+		}
 
 		let requireOrImport: ((file: string) => Promise<any>) | undefined;
 		if (args.esmLoader) {
-			let esmUtilsPath = path.join(mochaPath, 'lib/nodejs/esm-utils.js');
-			if (await fileExists(esmUtilsPath)) {
-				const esmUtils = require(esmUtilsPath);
-				requireOrImport = esmUtils.requireOrImport;
-			}
-			esmUtilsPath = path.join(mochaPath, 'lib/esm-utils.js');
-			if (await fileExists(esmUtilsPath)) {
-				const esmUtils = require(esmUtilsPath);
-				requireOrImport = esmUtils.requireOrImport;
+			for (const relativePath of ['lib/nodejs/esm-utils.cjs', 'lib/nodejs/esm-utils.js', 'lib/esm-utils.js']) {
+				const esmUtilsPath = path.join(mochaPath, relativePath);
+				if (await fileExists(esmUtilsPath)) {
+					requireOrImport = require(esmUtilsPath).requireOrImport;
+					break;
+				}
 			}
 		}
 
@@ -125,7 +157,7 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 		for (let req of args.mochaOpts.requires) {
 
 			if (fs.existsSync(req) || fs.existsSync(`${req}.js`)) {
-				req = path.resolve(req);
+				req = cwdRequire.resolve(path.resolve(req));
 			}
 
 			if (requireOrImport) {
@@ -178,24 +210,32 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 		if (args.action === 'loadTests') {
 
 			mocha.grep('$^');
-			mocha.run(async () => {
-				await processTests(mocha.suite, locationSymbol, sendMessage, args.logEnabled);
-				if (onFinished) onFinished();
+			await new Promise<void>((resolve, reject) => {
+				mocha.run(async () => {
+					try {
+						await processTests(mocha.suite, locationSymbol, sendMessage, args.logEnabled);
+						await finish();
+						resolve();
+					} catch (error) { reject(error); }
+				});
 			});
 
 		} else {
 
-			const stringify: (obj: any) => string = require(`${mochaPath}/lib/utils`).stringify;
+			const utilsPath = await fileExists(`${mochaPath}/lib/utils.cjs`) ? `${mochaPath}/lib/utils.cjs` : `${mochaPath}/lib/utils`;
+			const stringify: (obj: any) => string = require(utilsPath).stringify;
 			const regExp = new RegExp('^(' + args.tests!.map(RegExEscape).join('|') + ')$');
 			mocha.grep(regExp);
 			mocha.reporter(<any>ReporterFactory(sendMessage, stringify, sourceMapSupportEnabled, useBaseDir ? args.cwd : undefined));
 
 			if (args.logEnabled) sendMessage('Running tests');
-			await new Promise<void>(resolve => {
-				mocha.run(() => {
-					sendMessage({ type: 'finished' });
-					if (onFinished) onFinished();
-					resolve();
+			await new Promise<void>((resolve, reject) => {
+				mocha.run(async () => {
+					try {
+						await sendMessage({ type: 'finished' });
+						await finish();
+						resolve();
+					} catch (error) { reject(error); }
 				});
 			});
 

@@ -175,7 +175,7 @@ export class MochaOptsReader {
 				delay: options.delay,
 				fullTrace: options['full-trace'],
 				exit: options.exit,
-				asyncOnly: options.asyncOnly
+				asyncOnly: options.asyncOnly ?? options['async-only']
 			}
 		}
 	}

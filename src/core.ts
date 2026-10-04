@@ -1,12 +1,13 @@
 import * as path from 'path';
 import { ChildProcess, fork, spawn } from 'child_process';
-import { Socket } from 'net';
 import * as util from 'util';
 import { TestSuiteInfo, TestEvent, TestInfo, TestSuiteEvent, TestLoadStartedEvent, TestLoadFinishedEvent, TestRunStartedEvent, TestRunFinishedEvent, RetireEvent } from 'vscode-test-adapter-api';
-import { createConnection, receiveConnection, readMessages, writeMessage } from 'vscode-test-adapter-remoting-util';
 import { ErrorInfo, WorkerArgs } from 'vscode-test-adapter-remoting-util/out/mocha';
 import { findTests, stringsOnly } from './util';
 import { AdapterConfig } from './configReader';
+import { ipcHostOrLoopback } from './security';
+import { terminateWorker } from './process';
+import { createIpcKey, ipcKeyVariable, createSecureConnection, receiveSecureConnection, readSecureMessages, writeSecureMessage } from './secureIpc';
 
 export interface IDisposable {
 	dispose(): void;
@@ -35,6 +36,8 @@ export interface ILog {
 
 export abstract class MochaAdapterCore {
 
+	protected abstract readonly isWorkspaceTrusted: boolean;
+
 	protected abstract readonly workspaceFolderPath: string;
 
 	protected abstract readonly configReader: IConfigReader;
@@ -53,6 +56,7 @@ export abstract class MochaAdapterCore {
 	private readonly workerScript = require.resolve('../out/worker/bundle.js');
 
 	private runningTestProcess: ChildProcess | undefined;
+	private readonly workerKeys = new WeakMap<ChildProcess, string>();
 
 	private nextTestRunId = 0;
 
@@ -62,6 +66,8 @@ export abstract class MochaAdapterCore {
 	) {}
 
 	async load(changedFiles?: string[], reloadConfig = true): Promise<void> {
+
+		if (!this.isWorkspaceTrusted) return;
 
 		if (this.skipNextLoadRequest) {
 			if (this.log.enabled) this.log.info(`Skipping the initial load request for ${this.workspaceFolderPath}`);
@@ -82,7 +88,7 @@ export abstract class MochaAdapterCore {
 			}
 			const config = await this.configReader.currentConfig;
 
-			if (!config) {
+			if (!config || !this.isWorkspaceTrusted) {
 				this.log.info('Adapter disabled for this folder, loading cancelled');
 				this.nodesById.clear();
 				this.testsEmitter.fire(<TestLoadFinishedEvent>{ type: 'finished' });
@@ -165,7 +171,7 @@ export abstract class MochaAdapterCore {
 
 						testsLoaded = true;
 						if (config.mochaOpts.exit && !config.launcherScript) {
-							childProc.kill();
+							void terminateWorker(childProc).catch(error => this.log.error(error));
 						}
 						resolve();
 					}
@@ -215,6 +221,8 @@ export abstract class MochaAdapterCore {
 
 	async run(testsToRun: string[], debug = false): Promise<void> {
 
+		if (!this.isWorkspaceTrusted) return;
+
 		const testRunId = String(this.nextTestRunId++);
 
 		try {
@@ -223,7 +231,7 @@ export abstract class MochaAdapterCore {
 
 			const config = await this.configReader.currentConfig;
 
-			if (!config) {
+			if (!config || !this.isWorkspaceTrusted) {
 				this.log.info('Adapter disabled for this folder, running cancelled');
 				return;
 			}
@@ -340,7 +348,7 @@ export abstract class MochaAdapterCore {
 							}
 
 						} else if (config.mochaOpts.exit && !config.launcherScript && this.runningTestProcess) {
-							this.runningTestProcess.kill();
+							void terminateWorker(this.runningTestProcess).catch(error => this.log.error(error));
 						}
 					}
 				};
@@ -389,11 +397,13 @@ export abstract class MochaAdapterCore {
 
 	async debug(testsToRun: string[]): Promise<void> {
 
+		if (!this.isWorkspaceTrusted) return;
+
 		if (this.log.enabled) this.log.info(`Debugging test(s) ${JSON.stringify(testsToRun)} of ${this.workspaceFolderPath}`);
 
 		const config = await this.configReader.currentConfig;
 
-		if (!config) {
+		if (!config || !this.isWorkspaceTrusted) {
 			this.log.info('Adapter disabled for this folder, debugging cancelled');
 			return;
 		}
@@ -423,7 +433,7 @@ export abstract class MochaAdapterCore {
 	cancel(): void {
 		if (this.runningTestProcess) {
 			this.log.info('Killing running test process');
-			this.runningTestProcess.kill();
+			void terminateWorker(this.runningTestProcess).catch(error => this.log.error(error));
 		}
 	}
 
@@ -432,12 +442,15 @@ export abstract class MochaAdapterCore {
 		const ipcOpts = {
 			role: config.ipcRole ? ((config.ipcRole === 'client') ? 'server' : 'client') : undefined,
 			port: config.ipcRole ? config.ipcPort : undefined,
-			host: config.ipcRole ? config.ipcHost : undefined
+			host: config.ipcRole ? ipcHostOrLoopback(config.ipcHost) : undefined
 		};
 		const ipcOptsString = JSON.stringify(ipcOpts);
 
 		const env = stringsOnly({ ...process.env, ...config.env });
-		if (config.ipcRole) {
+		const key = createIpcKey();
+		env[ipcKeyVariable] = key;
+		if (config.launcherScript) env['MOCHA_WORKER_IPC_MODULE'] = require.resolve('../out/secureIpc.js');
+		if (config.ipcRole || config.launcherScript) {
 			env['VSCODE_WORKSPACE_PATH'] = this.workspaceFolderPath;
 			env['MOCHA_WORKER_PATH'] = this.workerScript;
 		}
@@ -445,11 +458,12 @@ export abstract class MochaAdapterCore {
 		const stdio: ('pipe' | 'ipc')[] = [ 'pipe', 'pipe', 'pipe', 'ipc' ];
 		const cwd = config.cwd;
 
+		let childProc: ChildProcess;
 		if (config.nodePath) {
 
 			if (this.log.enabled) this.log.debug(`Spawning ${childProcScript} with IPC options ${ipcOptsString}`);
 
-			return spawn(
+			childProc = spawn(
 				config.nodePath,
 				[ ...execArgv, childProcScript, ipcOptsString ],
 				{ env, stdio, cwd }
@@ -459,27 +473,36 @@ export abstract class MochaAdapterCore {
 
 			if (this.log.enabled) this.log.debug(`Forking ${childProcScript} with IPC options ${ipcOptsString}`);
 
-			return fork(
+			childProc = fork(
 				childProcScript,
 				[ ipcOptsString ],
 				{ execArgv, env, stdio, cwd }
 			);
 		}
+		this.workerKeys.set(childProc, key);
+		// Prevent an early launch error becoming an uncaught exception during IPC setup.
+		childProc.on('error', () => {});
+		return childProc;
 	}
 
 	private async connectToWorkerProcess(config: AdapterConfig, childProc: ChildProcess, args: WorkerArgs, handler: (msg: any) => void): Promise<void> {
 
 		if (config.ipcRole) {
 
-			let ipcSocket: Socket | undefined;
-			if (config.ipcRole === 'client') {
-				ipcSocket = await createConnection(config.ipcPort, { host: config.ipcHost, timeout: config.ipcTimeout });
-			} else {
-				ipcSocket = await receiveConnection(config.ipcPort, { host: config.ipcHost, timeout: config.ipcTimeout });
+			try {
+				const options = { host: ipcHostOrLoopback(config.ipcHost), timeout: config.ipcTimeout, key: this.workerKeys.get(childProc) };
+				const ipcSocket = await (config.ipcRole === 'client'
+					? createSecureConnection(config.ipcPort, options)
+					: receiveSecureConnection(config.ipcPort, options));
+				ipcSocket.on('error', () => { this.log.error('Secure worker IPC failed'); void terminateWorker(childProc).catch(error => this.log.error(error)); });
+				ipcSocket.once('close', () => { if (childProc.exitCode === null && !childProc.killed) void terminateWorker(childProc).catch(error => this.log.error(error)); });
+				childProc.once('exit', () => ipcSocket.destroy());
+				readSecureMessages(ipcSocket, handler);
+				await writeSecureMessage(ipcSocket, args);
+			} catch (error) {
+				void terminateWorker(childProc).catch(error => this.log.error(error));
+				throw error;
 			}
-
-			readMessages(ipcSocket, handler);
-			writeMessage(ipcSocket, args);
 
 		} else {
 

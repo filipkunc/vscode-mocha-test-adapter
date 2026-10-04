@@ -11,3 +11,7 @@ rollup.config.js
 .vscode/**
 .gitignore
 .rpt2_cache
+
+.github/**
+.ci-extension/**
+.ci-launchers/**

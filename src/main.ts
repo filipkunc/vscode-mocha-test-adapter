@@ -6,9 +6,12 @@ import { MochaAdapter } from './adapter';
 
 export async function activate(context: vscode.ExtensionContext) {
 
+	if (!vscode.workspace.isTrusted) return;
+
 	const workspaceFolder = (vscode.workspace.workspaceFolders || [])[0];
 	const outputChannel = vscode.window.createOutputChannel('Mocha Tests');
 	const log = new Log(configSection, workspaceFolder, 'Mocha Explorer Log');
+	context.subscriptions.push(outputChannel, log);
 
 	const testExplorerExtension = vscode.extensions.getExtension<TestHub>(testExplorerExtensionId);
 	if (log.enabled) log.info(`Test Explorer ${testExplorerExtension ? '' : 'not '}found`);

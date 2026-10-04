@@ -4,7 +4,7 @@ import { readFile, fileExists, normalizePath } from './util';
 import * as vscode from 'vscode';
 import { glob } from 'glob';
 import { minimatch } from 'minimatch';
-import chokidar from 'chokidar';
+import { FSWatcher } from 'chokidar';
 import assert from 'assert';
 import { parse as dotenvParse } from 'dotenv';
 import { detectNodePath, Log } from 'vscode-test-adapter-util';
@@ -13,6 +13,8 @@ import { MochaOpts } from 'vscode-test-adapter-remoting-util/out/mocha';
 import { MochaOptsReader, MochaOptsAndFiles } from './optsReader';
 import { configKeys, OnChange, configSection } from './configKeys';
 import { FileChangeDebouncer } from './debouncer';
+import { ipcHostOrLoopback } from './security';
+import { watchGlobs } from './globWatcher';
 
 export type EnvVars = { [envVar: string]: string | null };
 
@@ -71,7 +73,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 
 	private enabledStateKey: string;
 
-	private watcher?: chokidar.FSWatcher;
+	private watcher?: FSWatcher;
 	private debouncer?: FileChangeDebouncer;
 
 	private _currentConfig: Promise<AdapterConfig | undefined> | undefined;
@@ -207,7 +209,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 
 		const config = vscode.workspace.getConfiguration(configSection, this.workspaceFolder.uri);
 
-		if (!await this.checkEnabled(config)) {
+		if (!await this.checkEnabled(config) || !vscode.workspace.isTrusted) {
 			return undefined;
 		}
 
@@ -253,6 +255,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 					argv.push('--package', packageFile);
 				}
 			}
+			if (!vscode.workspace.isTrusted) return undefined;
 			optsFromFiles = await optsReader.readOptsUsingMocha(cwd, nodePath, nodeArgv, argv);
 
 		}
@@ -271,10 +274,8 @@ export class ConfigReader implements IConfigReader, IDisposable {
 
 		const watcherConfig = this.getWatcherConfig(config);
 		if (watcherConfig) {
-			this.watcher = chokidar.watch(watcherConfig.files, {
-				ignored: watcherConfig.ignore,
-				ignoreInitial: true
-			});
+			this.watcher = watchGlobs(watcherConfig.files, watcherConfig.ignore);
+			this.watcher.on('error', error => this.log.error('File watcher failed', error));
 			this.debouncer = new FileChangeDebouncer(
 				watcherConfig.debounce,
 				(reload, changedFiles) => this.filesChangedCallback(reload, changedFiles)
@@ -315,6 +316,10 @@ export class ConfigReader implements IConfigReader, IDisposable {
 	}
 
 	private async checkEnabled(config: vscode.WorkspaceConfiguration): Promise<boolean> {
+
+		if (!vscode.workspace.isTrusted) {
+			return false;
+		}
 
 		if (this.workspaceFolder.uri.scheme !== 'file') {
 			return false;
@@ -435,7 +440,9 @@ export class ConfigReader implements IConfigReader, IDisposable {
 		}
 
 		const normalizeArray = (files: string[]) => files.map(
-			file => path.resolve(this.workspaceFolder.uri.fsPath, file)
+			file => file.startsWith('!')
+				? '!' + path.resolve(this.workspaceFolder.uri.fsPath, file.slice(1))
+				: path.resolve(this.workspaceFolder.uri.fsPath, file)
 		);
 
 		const defaultIgnore = normalizeArray([ '**/node_modules/**' ]);
@@ -570,7 +577,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 	private async getEnv(config: vscode.WorkspaceConfiguration, mochaOpts: MochaOpts): Promise<EnvVars> {
 
 		let resultEnv: EnvVars = config.get(configKeys.env.key) || {};
-		if (this.log.enabled) this.log.debug(`Using environment variables from config: ${JSON.stringify(resultEnv)}`);
+		if (this.log.enabled) this.log.debug(`Using environment variable names from config: ${JSON.stringify(Object.keys(resultEnv))}`);
 
 		let envPath: string | undefined = config.get<string>(configKeys.envPath.key);
 		if (envPath) {
@@ -594,7 +601,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 		}
 
 		// workaround for esm not working when mocha is loaded programmatically (see #12)
-		if ((mochaOpts.requires.indexOf('esm') >= 0) && !resultEnv.hasOwnProperty('NYC_ROOT_ID')) {
+		if ((mochaOpts.requires.indexOf('esm') >= 0) && !Object.prototype.hasOwnProperty.call(resultEnv, 'NYC_ROOT_ID')) {
 			resultEnv['NYC_ROOT_ID'] = '';
 		}
 
@@ -737,7 +744,7 @@ export class ConfigReader implements IConfigReader, IDisposable {
 	}
 
 	private getIpcHost(config: vscode.WorkspaceConfiguration): string | undefined {
-		return config.get<string | null>('ipcHost') || undefined;
+		return ipcHostOrLoopback(config.get<string | null>('ipcHost'));
 	}
 
 	private getIpcTimeout(config: vscode.WorkspaceConfiguration): number {
