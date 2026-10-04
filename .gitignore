@@ -2,3 +2,7 @@
 node_modules
 out
 .rpt2_cache
+
+.ci-extension/
+.ci-launchers/
+*.vsix

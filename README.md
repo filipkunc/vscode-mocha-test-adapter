@@ -220,3 +220,7 @@ There is a [bug in Node 10.6.0 - 10.9.0](https://github.com/nodejs/node/issues/2
 If you're using a version of Node affected by this bug, add `"mochaExplorer.nodePath": null` to your configuration as a workaround.
 
 If you think you've found a bug, please [file a bug report](https://github.com/hbenl/vscode-mocha-test-adapter/issues) and attach the diagnostic logs.
+
+### Continuous integration
+
+Both forks require the `CI gate` status check before merging into `master`. CI tests Node 22.12, 24 and 26 on Linux, Windows and macOS, audits the locked dependency graph, builds installable packages and exercises the matching launcher fork. A separate job tests the minimum VS Code Electron runtime. Linux integration runs include real Node 24 container workers and keepalive/cancellation regressions. The two integration workflows check the companion security branch, so changes to either fork must keep both compatible. Workflow actions are pinned to commit IDs and receive read-only repository permissions.

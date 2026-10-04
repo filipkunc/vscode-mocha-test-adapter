@@ -11,6 +11,9 @@ import { fileExists } from '../util';
 import { createSecureConnection, receiveSecureConnection, readSecureMessages, writeSecureMessage, ipcKeyVariable } from '../secureIpc';
 import { assertWorkerRuntime } from '../runtime';
 
+// An embedded VS Code test runner must let its host control process lifetime.
+const ownsProcess = require.main === module || module.id === '[stdin]';
+
 export default (async () => {
 	assertWorkerRuntime();
 	const key = process.env[ipcKeyVariable];
@@ -35,7 +38,9 @@ export default (async () => {
 		const socket = (netOpts.role === 'client') ?
 			await createSecureConnection(netOpts.port, { host: netOpts.host, key }) :
 			await receiveSecureConnection(netOpts.port, { host: netOpts.host, key });
-		socket.on('error', () => process.exit(1));
+		let ending = false;
+		socket.on('error', () => { if (ownsProcess) process.exit(1); });
+		socket.once('close', () => { if (ownsProcess && !ending) process.exit(1); });
 
 		const args = await new Promise<WorkerArgs>((resolve, reject) => {
 			socket.once('error', reject);
@@ -43,15 +48,26 @@ export default (async () => {
 			readSecureMessages(socket, resolve);
 		});
 
-		await execute(args, msg => writeSecureMessage(socket, msg), () => socket.unref());
+		await execute(args, msg => writeSecureMessage(socket, msg), async () => {
+			if (args.mochaOpts.exit) {
+				ending = true;
+				await new Promise<void>(resolve => socket.end(resolve));
+			} else {
+				socket.unref();
+			}
+		});
 
 	} else if (process.send) {
+
+		if (ownsProcess) process.once('disconnect', () => process.exit(1));
 
 		const args = await new Promise<WorkerArgs>(resolve => {
 			process.once('message', resolve);
 		});
 
-		await execute(args, async msg => { process.send!(msg); });
+		await execute(args, msg => new Promise<void>((resolve, reject) => {
+			process.send!(msg, error => error ? reject(error) : resolve());
+		}), async () => { process.channel?.unref(); });
 
 	} else {
 
@@ -60,8 +76,14 @@ export default (async () => {
 	}
 })();
 
-async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<void>, onFinished?: () => void): Promise<void> {
+async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<void>, onFinished?: () => Promise<void>): Promise<void> {
 
+	const finish = async () => {
+		if (onFinished) await onFinished();
+		// Wait for the final IPC write before exiting. NYC then runs its normal
+		// exit hooks and its parent can write coverage instead of being killed.
+		if (args.mochaOpts.exit && ownsProcess) process.exit(0);
+	};
 	let logEnabled = args.logEnabled;
 	let sendErrorInfo = (args.action === 'loadTests');
 	const sourceMapSupportEnabled = args.mochaOpts.requires.includes('source-map-support/register');
@@ -188,9 +210,14 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 		if (args.action === 'loadTests') {
 
 			mocha.grep('$^');
-			mocha.run(async () => {
-				await processTests(mocha.suite, locationSymbol, sendMessage, args.logEnabled);
-				if (onFinished) onFinished();
+			await new Promise<void>((resolve, reject) => {
+				mocha.run(async () => {
+					try {
+						await processTests(mocha.suite, locationSymbol, sendMessage, args.logEnabled);
+						await finish();
+						resolve();
+					} catch (error) { reject(error); }
+				});
 			});
 
 		} else {
@@ -202,11 +229,13 @@ async function execute(args: WorkerArgs, sendMessage: (message: any) => Promise<
 			mocha.reporter(<any>ReporterFactory(sendMessage, stringify, sourceMapSupportEnabled, useBaseDir ? args.cwd : undefined));
 
 			if (args.logEnabled) sendMessage('Running tests');
-			await new Promise<void>(resolve => {
-				mocha.run(() => {
-					sendMessage({ type: 'finished' });
-					if (onFinished) onFinished();
-					resolve();
+			await new Promise<void>((resolve, reject) => {
+				mocha.run(async () => {
+					try {
+						await sendMessage({ type: 'finished' });
+						await finish();
+						resolve();
+					} catch (error) { reject(error); }
 				});
 			});
 

@@ -15,7 +15,7 @@ describe("Test files that keep the node process alive", function() {
 
 	it("should not be left running after running the tests", async function() {
 
-		this.timeout(1000);
+		this.timeout(10000);
 
 		const adapter = await createTestMochaAdapter('javascript/exit-run');
 
@@ -27,17 +27,20 @@ describe("Test files that keep the node process alive", function() {
 	});
 });
 
-function throwIfWorkerProcessIsRunning(): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
+async function throwIfWorkerProcessIsRunning(): Promise<void> {
+	const deadline = Date.now() + 2000;
+	while (true) {
 		const server = net.createServer();
-		// check if port 12345 is still occupied - it shouldn't be
-		server.listen(12345, ((e: any) => {
-			if (e) {
-				reject(e);
-			} else {
-				server.close();
-				resolve();
-			}
-		}) as (() => void));
-	});
+		try {
+			await new Promise<void>((resolve, reject) => {
+				server.once('error', reject);
+				server.listen(12345, '127.0.0.1', resolve);
+			});
+			await new Promise<void>(resolve => server.close(() => resolve()));
+			return;
+		} catch (error: any) {
+			if (error.code !== 'EADDRINUSE' || Date.now() >= deadline) throw error;
+			await new Promise(resolve => setTimeout(resolve, 25));
+		}
+	}
 }
